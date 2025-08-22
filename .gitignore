@@ -1,0 +1,7 @@
+.clean/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+staticfiles/
