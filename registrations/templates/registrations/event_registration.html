@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}FLC Event Registration{% endblock %}
+
+{% block content %}
+<div class="container mt-5">
+    <h1 id="event-title" class="mb-4 text-primary">FLC Event Registration</h1>
+
+    <form method="post" novalidate aria-label="Event Registration Form">
+        {% csrf_token %}
+
+        <div class="mb-3">
+            {{ form.advisor.label_tag }}
+            {{ form.advisor }}
+            <div class="text-danger small">{{ form.advisor.errors }}</div>
+        </div>
+
+        <div class="mb-3">
+            {{ form.first_name.label_tag }}
+            {{ form.first_name }}
+            <div class="text-danger small">{{ form.first_name.errors }}</div>
+        </div>
+
+        <div class="mb-3">
+            {{ form.last_name.label_tag }}
+            {{ form.last_name }}
+            <div class="text-danger small">{{ form.last_name.errors }}</div>
+        </div>
+
+        <div class="mb-3">
+            {{ form.student_organization.label_tag }}
+            {{ form.student_organization }}
+            <div class="text-danger small">{{ form.student_organization.errors }}</div>
+        </div>
+
+        <div class="mb-3">
+            {{ form.college_company.label_tag }}
+            {{ form.college_company }}
+            <div class="text-danger small">{{ form.college_company.errors }}</div>
+        </div>
+
+        <div class="mb-3">
+            {{ form.tour.label_tag }}
+            {{ form.tour }}
+            <div class="text-danger small">{{ form.tour.errors }}</div>
+        </div>
+
+        <div class="mb-3">
+            {{ form.tee_shirt_size.label_tag }}
+            {{ form.tee_shirt_size }}
+            <div class="text-danger small">{{ form.tee_shirt_size.errors }}</div>
+        </div>
+
+        <div class="mb-3">
+            {{ form.food_allergy.label_tag }}
+            {{ form.food_allergy }}
+            <div class="text-danger small">{{ form.food_allergy.errors }}</div>
+        </div>
+
+        <div class="mb-3">
+            {{ form.ada_needs.label_tag }}
+            {{ form.ada_needs }}
+            <div class="text-danger small">{{ form.ada_needs.errors }}</div>
+        </div>
+
+        <button type="submit"
+                class="btn btn-primary btn-lg mt-3"
+                aria-label="Submit Event Registration">
+            Register
+        </button>
+    </form>
+</div>
+{% endblock %}

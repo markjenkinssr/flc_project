@@ -1,0 +1,23 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Registration Confirmation</title>
+    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+</head>
+<body>
+<main class="container">
+    <h1>Registration Complete</h1>
+    <p>Thank you for registering. Here is the information you submitted:</p>
+
+    <ul>
+        {% for field in form %}
+            <li><strong>{{ field.label }}:</strong> {{ field.value }}</li>
+        {% endfor %}
+    </ul>
+
+    <a href="{% url 'registrations_home' %}" class="btn btn-secondary">Back to Home</a>
+</main>
+</body>
+</html>

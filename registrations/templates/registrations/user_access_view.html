@@ -1,0 +1,71 @@
+# registrations/views.py
+from django.contrib import messages
+from django.shortcuts import render, redirect
+from django.views.decorators.csrf import csrf_protect
+from django.urls import reverse
+
+from .forms import AdvisorAccessForm
+from .models import PendingUser
+from .mailers import send_html
+from .utils_tokens import make_validation_token
+
+def _validation_link(request, user):
+    token = make_validation_token(user.id, user.email)
+    return request.build_absolute_uri(reverse("registrations:validate_user", args=[token]))
+
+def _name_choices_for_category(category: str):
+    from django.db.models import F
+    if not category:
+        return [("", "— Select —")]
+    qs = PendingUser.objects.filter(category=category).order_by("first_name", "last_name")
+    choices = [("", "— Select —")]
+    for u in qs:
+        full = f"{u.first_name} {u.last_name}"
+        choices.append((full, full))
+    return choices
+
+@csrf_protect
+def user_access_view(request):
+    if request.method == "POST":
+        form = AdvisorAccessForm(request.POST)
+        # server-side populate name choices for validation
+        form.fields["name"].choices = _name_choices_for_category(request.POST.get("category", ""))
+
+        if form.is_valid():
+            category = form.cleaned_data["category"]
+            full_name = form.cleaned_data["name"].strip()
+            parts = full_name.split()
+            if len(parts) < 2:
+                messages.error(request, "Please select your full name (First Last).")
+                return redirect("registrations:user_access")
+            first, last = parts[0], " ".join(parts[1:])
+
+            try:
+                user = PendingUser.objects.get(first_name=first, last_name=last, category=category)
+            except PendingUser.DoesNotExist:
+                messages.error(request, "User not found in that category.")
+                return redirect("registrations:user_access")
+
+            # send validation email
+            try:
+                link = _validation_link(request, user)
+                html = f"""
+                    <p>Hello {user.first_name},</p>
+                    <p>Confirm your email to open your secure FLC Registration session:</p>
+                    <p><a href="{link}" style="display:inline-block;padding:10px 14px;background:#0d6efd;color:#fff;border-radius:6px;text-decoration:none;">
+                    Confirm & Open</a></p>
+                """
+                send_html(user.email, "Confirm your email for FLC Registration", html)
+            except Exception as e:
+                messages.error(request, f"Could not send the email right now. ({e})")
+                return redirect("registrations:user_access")
+
+            # ✅ Redirect to a dedicated confirmation page (NO hard-coded path)
+            return redirect("registrations:confirmation_sent", email=user.email)
+
+        # invalid form → re-render with errors
+        return render(request, "registrations/user_access.html", {"form": form})
+
+    # GET
+    form = AdvisorAccessForm()
+    return render(request, "registrations/user_access.html", {"form": form})

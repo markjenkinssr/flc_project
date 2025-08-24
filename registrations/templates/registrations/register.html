@@ -1,0 +1,25 @@
+<h1>Event Registration</h1>
+
+
+
+{% block content %}
+<main class="container mt-4" aria-labelledby="reg-title">
+  <h1 id="reg-title" class="mb-3">Event Registration</h1>
+  <p class="mb-3">Signed in as: <strong>{{ verified_email }}</strong></p>
+<form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Register</button>
+</form>
+{% extends "base.html" %}
+  
+  <!-- Your accessible registration form goes here -->
+  <!-- Example field scaffolding:
+  <form method="post" novalidate>
+    {% csrf_token %}
+    ... fields ...
+    <button class="btn btn-success">Submit</button>
+  </form>
+  -->
+</main>
+{% endblock %}

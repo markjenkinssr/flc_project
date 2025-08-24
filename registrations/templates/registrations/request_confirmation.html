@@ -1,0 +1,16 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Request Submitted</title>
+    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+</head>
+<body>
+<main class="container">
+    <h1>Request Submitted</h1>
+    <p>Your request for a new user has been submitted successfully.</p>
+    <a href="{% url 'registrations_home' %}" class="btn btn-secondary">Back to Home</a>
+</main>
+</body>
+</html>
