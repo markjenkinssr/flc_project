@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 .env
 staticfiles/
+env.txt
+.env
+.env.*
