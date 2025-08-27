@@ -1,19 +1,30 @@
-cat > settings_production.py <<'PY'
+from settings import * 
 import os
-from settings import *  # import your base dev settings
-
 DEBUG = False
-SECRET_KEY = os.environ["SECRET_KEY"]
 
-ALLOWED_HOSTS = [h for h in os.environ.get("ALLOWED_HOSTS","").split(",") if h]
-CSRF_TRUSTED_ORIGINS = [o for o in os.environ.get("CSRF_TRUSTED_ORIGINS","").split(",") if o]
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "").split(",") if h.strip()]
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()]
+SECRET_KEY = os.getenv("SECRET_KEY", SECRET_KEY)  # fallback to base if not set
 
-import dj_database_url
-DATABASES = {
-    "default": dj_database_url.parse(os.environ["DATABASE_URL"], conn_max_age=600, ssl_require=True)
-}
+if "DATABASE_URL" in os.environ:
+    from urllib.parse import urlparse
+    u = urlparse(os.environ["DATABASE_URL"])
+    DATABASES = {
+        "default": {
 
-STATIC_ROOT = BASE_DIR / "staticfiles"
-MIDDLEWARE = ["whitenoise.middleware.WhiteNoiseMiddleware", *MIDDLEWARE]
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
-PY
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": u.path.lstrip("/"),
+            "USER": u.username,
+            "PASSWORD": u.password,
+            "HOST": u.hostname,
+            "PORT": u.port or 5432,
+        }
+    }
+
+STATIC_ROOT = os.getenv("STATIC_ROOT", str(BASE_DIR / "staticfiles"))
+
+STATICFILES_DIRS = []
+
+STATIC_URL = "/static/"
+
+
