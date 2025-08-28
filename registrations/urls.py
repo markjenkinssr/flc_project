@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views_real as vr
+from . import views_full as vr  # <- real views
 
 app_name = "registrations"
 
