@@ -139,6 +139,150 @@ def _ensure_flat_tables_if_missing():
 
 # ---------- Edit/Delete helpers ----------
 
+def _build_table_and_csv(rows):
+    """
+    rows: list of either 8-tuple (f,l,a,org,sz,col,tr,rate)
+          or 9-tuple (rk,f,l,a,org,sz,col,tr,rate)
+    Returns: (html_table, csv_text, count, total_dollars)
+    """
+    out = []
+    csv_lines = ["First,Last,Advisor,Organization,Size,College/Company,Tour,Rate"]
+    count = 0
+    for tup in rows or []:
+        if isinstance(tup, (list, tuple)) and len(tup) == 9:
+            _, f, l, a, org, sz, col, tr, rate = tup
+        else:
+            f, l, a, org, sz, col, tr, rate = tup
+        rate = int(rate) if str(rate).isdigit() else FEE_USD
+        out.append(
+            "<tr>"
+            f"<td>{escape(f)}</td><td>{escape(l)}</td><td>{escape(a)}</td>"
+            f"<td>{escape(org or '')}</td><td>{escape(sz or '')}</td>"
+            f"<td>{escape(col or '')}</td><td>{escape(tr or '')}</td>"
+            f"<td>$ {rate}</td>"
+            "</tr>"
+        )
+        csv_lines.append(",".join([
+            f.replace(","," "), l.replace(","," "), a.replace(","," "),
+            (org or "").replace(","," "), (sz or "").replace(","," "),
+            (col or "").replace(","," "), (tr or "").replace(","," "),
+            str(rate)
+        ]))
+        count += 1
+    total = FEE_USD * count
+    table = (
+        "<table aria-label='Summary' style='font-size:.92rem;'>"
+        "<thead><tr>"
+        "<th>First</th><th>Last</th><th>Advisor</th><th>Org</th>"
+        "<th>Size</th><th>College/Company</th><th>Tour</th><th>Rate</th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(out) or '<tr><td colspan=8 class=muted>None</td></tr>'}</tbody>"
+        f"<tfoot><tr><td colspan=8 class='muted'>Total: $ {total}</td></tr></tfoot>"
+        "</table>"
+    )
+    return table, "\n".join(csv_lines) + "\n", count, total
+
+
+def _select_participants_for_advisor(advisor_email, limit=50):
+    """Returns rows with a stable rowkey so we can Edit/Delete safely."""
+    if not advisor_email:
+        return []
+    # Try real table
+    rows = _try_select("""
+      SELECT 'p:'||id AS rk, first_name, last_name, advisor_email,
+             COALESCE(student_organization,''), COALESCE(tee_shirt_size,''), COALESCE(college_company,''), COALESCE(tour,''),
+             (fee_cents/100)
+      FROM registrations_participant
+      WHERE LOWER(advisor_email)=LOWER(%s)
+      ORDER BY created_at ASC, id ASC
+      LIMIT %s
+    """, [advisor_email, limit])
+    if rows is not None:
+        return rows
+
+    # Fallback
+    rows = _try_select("""
+      SELECT 'pf:'||id AS rk, first_name, last_name, advisor_email,
+             COALESCE(student_organization,''), COALESCE(tee_shirt_size,''), COALESCE(college_company,''), COALESCE(tour,''),
+             (fee_cents/100)
+      FROM registrations_participant_fallback
+      WHERE LOWER(advisor_email)=LOWER(%s)
+      ORDER BY created_at ASC, id ASC
+      LIMIT %s
+    """, [advisor_email, limit])
+    return rows or []
+
+
+def _select_participants_all(limit=2000):
+    rows = _try_select("""
+      SELECT 'p:'||id AS rk, first_name, last_name, advisor_email,
+             COALESCE(student_organization,''), COALESCE(tee_shirt_size,''), COALESCE(college_company,''), COALESCE(tour,''),
+             (fee_cents/100)
+      FROM registrations_participant
+      ORDER BY created_at ASC, id ASC
+      LIMIT %s
+    """, [limit])
+    if rows is not None:
+        return rows
+    rows = _try_select("""
+      SELECT 'pf:'||id AS rk, first_name, last_name, advisor_email,
+             COALESCE(student_organization,''), COALESCE(tee_shirt_size,''), COALESCE(college_company,''), COALESCE(tour,''),
+             (fee_cents/100)
+      FROM registrations_participant_fallback
+      ORDER BY created_at ASC, id ASC
+      LIMIT %s
+    """, [limit])
+    return rows or []
+
+
+def _parse_rowkey(rk):
+    """Returns ('p' or 'pf', integer id)."""
+    if not rk or ':' not in rk:
+        return None, None
+    prefix, sid = rk.split(':', 1)
+    try:
+        return prefix, int(sid)
+    except Exception:
+        return None, None
+
+
+def _delete_participant(rowkey, advisor_email):
+    prefix, sid = _parse_rowkey(rowkey)
+    if not sid or not advisor_email:
+        return False, "bad rowkey/advisor"
+    if prefix == 'p':
+        return _try_exec(
+            "DELETE FROM registrations_participant WHERE id=%s AND LOWER(advisor_email)=LOWER(%s)",
+            [sid, advisor_email]
+        )
+    elif prefix == 'pf':
+        return _try_exec(
+            "DELETE FROM registrations_participant_fallback WHERE id=%s AND LOWER(advisor_email)=LOWER(%s)",
+            [sid, advisor_email]
+        )
+    return False, "unknown table prefix"
+
+
+def _fetch_participant_by_rowkey(rowkey):
+    prefix, sid = _parse_rowkey(rowkey)
+    if not sid:
+        return None
+    if prefix == 'p':
+        rows = _try_select("""
+          SELECT first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour
+          FROM registrations_participant WHERE id=%s
+        """,[sid])
+    else:
+        rows = _try_select("""
+          SELECT first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour
+          FROM registrations_participant_fallback WHERE id=%s
+        """,[sid])
+    if not rows:
+        return None
+    f,l,a,org,sz,col,tr = rows[0]
+    return {"first":f,"last":l,"advisor":a,"org":org,"size":sz,"college":col,"tour":tr}
+
+
 def _rowkey(src_char, pid):
     return f"{src_char}:{int(pid)}"  # src_char = 'p' or 'f'
 
@@ -311,8 +455,20 @@ def form_view(request):
     advisor_for_list = advisor_email_url  # which advisor’s rows to show
 
     if request.method == "POST":
-        # FINISH summary (typed advisor preferred; falls back to URL ?email=...)
-        if request.POST.get("finish"):
+        # 1) DELETE comes first so it doesn't fall through to finish/save
+        delete_rowkey = _safe_get(request.POST, "delete_row").strip()
+        if delete_rowkey:
+            typed_advisor = _safe_get(request.POST, "advisor_email").strip().lower() or advisor_email_url
+            ok, msg = _delete_participant(delete_rowkey, typed_advisor)
+            status_block = (
+                '<div class="card success" role="status">Participant deleted.</div>'
+                if ok else f'<div class="card error" role="alert">Delete failed: {escape(msg)}</div>'
+            )
+            # after a delete, show that advisor's updated list
+            advisor_for_list = typed_advisor or advisor_email_url
+
+        # 2) FINISH summary (typed advisor preferred; fallback to URL ?email=...)
+        elif request.POST.get("finish"):
             admin_mode = _safe_get(request.GET, "all", "").lower() in ("1", "true", "yes")
             if admin_mode:
                 rows = _select_participants_all(2000)
@@ -343,7 +499,7 @@ def form_view(request):
             </div>
             """
 
-        # SAVE / SHOW ENTRIES / UPDATE (normal flow)
+        # 3) SAVE / SHOW ENTRIES (normal flow)
         else:
             first   = _safe_get(request.POST, "first_name").strip()
             last    = _safe_get(request.POST, "last_name").strip()
@@ -353,20 +509,20 @@ def form_view(request):
             tour    = _safe_get(request.POST, "tour").strip()
             dietary = _safe_get(request.POST, "dietary_restrictions").strip()
             ada     = _safe_get(request.POST, "ada").strip()
-            role    = _safe_get(request.POST, "role").strip()  # read but not stored (safe)
+            role    = _safe_get(request.POST, "role").strip()  # read-only for now
             typed_advisor = _safe_get(request.POST, "advisor_email").strip().lower()
 
-            # which advisor’s list to show after POST
+            # whose list to show after POST
             advisor_for_list = typed_advisor or advisor_email_url
 
-            # Just show entries (no validation)
+            # Just show previous entries (no validation)
             if request.POST.get("show_entries"):
                 if typed_advisor and "@" in typed_advisor:
                     status_block = f'<div class="card success" role="status">Showing entries for {escape(typed_advisor)}</div>'
                 else:
                     status_block = '<div class="card warn" role="alert">Enter a valid advisor email to see previous entries.</div>'
 
-            # Insert new row
+            # Insert a new participant
             else:
                 if not (typed_advisor and "@" in typed_advisor):
                     status_block = '<div class="card warn" role="alert">Advisor email is required for each entry.</div>'
@@ -376,47 +532,56 @@ def form_view(request):
                     ok, msg = _insert_participant(
                         first, last, org, size, college, tour, dietary, ada, FEE_CENTS, typed_advisor
                     )
-                    if ok:
-                        status_block = (
-                            f'<div class="card success" role="status" aria-live="polite">'
-                            f'Saved {escape(first)} {escape(last)} (fee $ {FEE_USD})'
-                            f'</div>'
-                        )
-                    else:
-                        status_block = f'<div class="card error" role="alert">DB write failed. Details: {escape(msg)}</div>'
+                    status_block = (
+                        f'<div class="card success" role="status" aria-live="polite">Saved {escape(first)} {escape(last)} (fee $ {FEE_USD})</div>'
+                        if ok else f'<div class="card error" role="alert">DB write failed. Details: {escape(msg)}</div>'
+                    )
+
 
     # Build advisor-scoped table (simple & stable; supports 8- or 9-tuples)
     rows = _select_participants_for_advisor(advisor_for_list, limit=50) if advisor_for_list else []
+
     if not rows:
         part_html = "<p class='muted'>No participants found.</p>"
     else:
         body_rows = []
         for tup in rows:
-            # 9-tuple: (rk,f,l,a,org,sz,col,tr,rate) | 8-tuple: (f,l,a,org,sz,col,tr,rate)
-            if isinstance(tup, (list, tuple)) and len(tup) == 9:
-                _, f, l, a, org, sz, col, tr, rate = tup
-            else:
-                f, l, a, org, sz, col, tr, rate = tup
+            # 9-tuple with rowkey
+            rk, f, l, a, org, sz, col, tr, rate = tup
             body_rows.append(
                 "<tr>"
                 f"<td>{escape(f)}</td><td>{escape(l)}</td><td>{escape(a)}</td>"
                 f"<td>{escape(org or '')}</td><td>{escape(sz or '')}</td>"
                 f"<td>{escape(col or '')}</td><td>{escape(tr or '')}</td>"
                 f"<td>$ {FEE_USD}</td>"
+                "<td class='actions'>"
+                "<form class='inline' method='get' style='display:inline-block;margin:0 4px;'>"
+                f"  <input type='hidden' name='email' value='{escape(advisor_for_list or '')}'/>"
+                f"  <input type='hidden' name='edit' value='{escape(rk)}'/>"
+                "  <button type='submit' class='btn-muted' aria-label='Edit'>Edit</button>"
+                "</form>"
+                "<form class='inline' method='post' style='display:inline-block;margin:0 4px;'>"
+                f"  <input type='hidden' name='advisor_email' value='{escape(advisor_for_list or '')}'/>"
+                f"  <input type='hidden' name='delete_row' value='{escape(rk)}'/>"
+                "  <button type='submit' class='btn-danger' aria-label='Delete'>Delete</button>"
+                "</form>"
+                "</td>"
                 "</tr>"
             )
+
         part_html = f"""
-        <table aria-label="Recently added participants">
+        <table aria-label="Recently added participants" style="font-size:.92rem;">
           <thead>
             <tr>
               <th>First</th><th>Last</th><th>Advisor</th>
-              <th>Org</th><th>Size</th><th>College/Company</th><th>Tour</th><th>Rate</th>
+              <th>Org</th><th>Size</th><th>College/Company</th><th>Tour</th><th>Rate</th><th>Actions</th>
             </tr>
           </thead>
           <tbody>{''.join(body_rows)}</tbody>
-          <tfoot><tr><td colspan="8" class="muted">Oldest at top, newest at bottom</td></tr></tfoot>
+          <tfoot><tr><td colspan="9" class="muted">Oldest at top, newest at bottom</td></tr></tfoot>
         </table>
         """
+
 
     # Live estimate banner
     advisor_count = len(rows) if rows else 0
