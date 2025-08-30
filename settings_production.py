@@ -21,7 +21,7 @@ if "DATABASE_URL" in os.environ:
         }
     }
 
-STATIC_ROOT = os.getenv("STATIC_ROOT", str(BASE_DIR / "staticfiles"))
+STATIC_ROOT = "/srv/flc_project/staticfiles"
 
 STATICFILES_DIRS = []
 

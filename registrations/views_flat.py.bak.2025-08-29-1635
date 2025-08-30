@@ -1,5 +1,4 @@
 from django.http import HttpResponse
-import urllib.parse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.html import escape
 from django.conf import settings
@@ -35,8 +34,6 @@ def _html_page(title: str, body: str) -> HttpResponse:
     button {{ cursor: pointer; font-weight: 700; }}
     .btn-primary {{ background: var(--primary); color: #fff; border-color: transparent; }}
     .btn-left {{ width: 100%; max-width: 360px; }}
-    .btn-danger {{ background:#b91c1c; color:#fff; border-color:transparent; }}
-    .btn-muted {{ background:#e5e7eb; color:#111; border-color:transparent; }}
     .success {{ background: #f0fff4; border-color: #a7f3d0; }}
     .warn {{ background: #fffaf0; border-color: #fde68a; }}
     .error {{ background: #fff5f5; border-color: #fecaca; }}
@@ -50,8 +47,6 @@ def _html_page(title: str, body: str) -> HttpResponse:
     .topbox-text {{ margin:0; color:#333; }}
     .topbox-spacer {{ margin-left:auto; }}
     .btn-finish {{ width:360px; max-width:50%; }}
-    form.inline {{ display:inline; margin:0; }}
-    .actions {{ white-space:nowrap; display:flex; gap:8px; }}
     /* space between form rows */
     form.card .row + .row {{ margin-top: .5rem; }}
   </style>
@@ -137,109 +132,53 @@ def _ensure_flat_tables_if_missing():
 
     return pending_ok, participant_ok
 
-# ---------- Edit/Delete helpers ----------
-
-def _rowkey(src_char, pid):
-    return f"{src_char}:{int(pid)}"  # src_char = 'p' or 'f'
-
-def _parse_rowkey(s):
-    try:
-        src, sid = (s or "").split(":", 1)
-        sid = int(sid)
-        if src in ("p", "f"):
-            return src, sid
-    except Exception:
-        pass
-    return None, None
-
-def _fetch_participant_by_rowkey(rowkey):
-    src, pid = _parse_rowkey(rowkey)
-    if not pid:
-        return None
-    if src == "p":
-        row = _try_select("""SELECT id, first_name,last_name,student_organization,tee_shirt_size,college_company,tour,fee_cents,advisor_email
-                             FROM registrations_participant WHERE id=%s LIMIT 1;""", [pid])
-    else:
-        row = _try_select("""SELECT id, first_name,last_name,student_organization,tee_shirt_size,college_company,tour,fee_cents,advisor_email,
-                                    dietary_restrictions, ada
-                             FROM registrations_participant_fallback WHERE id=%s LIMIT 1;""", [pid])
-    if not row:
-        return None
-    if src == "p":
-        (rid, f, l, org, sz, col, tr, fee, adv) = row[0]
-        return {"src":"p","id":rid,"first":f,"last":l,"org":org,"size":sz,"college":col,"tour":tr,"fee":fee,"advisor":(adv or "")}
-    else:
-        (rid, f, l, org, sz, col, tr, fee, adv, diet, ada) = row[0]
-        return {"src":"f","id":rid,"first":f,"last":l,"org":org,"size":sz,"college":col,"tour":tr,"fee":fee,"advisor":(adv or ""),"dietary":(diet or ""),"ada":(ada or "")}
-
-def _update_participant(rowkey, guard_advisor, first, last, org, size, college, tour, dietary, ada, advisor_new):
-    # Only allow if the row's advisor matches the current advisor (typed or URL)
-    data = _fetch_participant_by_rowkey(rowkey)
-    if not data:
-        return False, "Row not found"
-    if not (guard_advisor and guard_advisor == (data.get("advisor") or "")):
-        return False, "Advisor mismatch"
-    if data["src"] == "p":
-        # primary table doesn't have dietary/ada in this app
-        return _try_exec("""UPDATE registrations_participant
-                            SET first_name=%s,last_name=%s,student_organization=%s,tee_shirt_size=%s,
-                                college_company=%s,tour=%s,advisor_email=%s
-                            WHERE id=%s AND advisor_email=%s;""",
-                         [first,last,org,size,college,tour,advisor_new,data["id"],guard_advisor])
-    else:
-        return _try_exec("""UPDATE registrations_participant_fallback
-                            SET first_name=%s,last_name=%s,student_organization=%s,tee_shirt_size=%s,
-                                college_company=%s,tour=%s,dietary_restrictions=%s,ada=%s,advisor_email=%s
-                            WHERE id=%s AND advisor_email=%s;""",
-                         [first,last,org,size,college,tour,dietary,ada,advisor_new,data["id"],guard_advisor])
-
-def _delete_participant(rowkey, guard_advisor):
-    data = _fetch_participant_by_rowkey(rowkey)
-    if not data:
-        return False, "Row not found"
-    if not (guard_advisor and guard_advisor == (data.get("advisor") or "")):
-        return False, "Advisor mismatch"
-    if data["src"] == "p":
-        return _try_exec("DELETE FROM registrations_participant WHERE id=%s AND advisor_email=%s;", [data["id"], guard_advisor])
-    else:
-        return _try_exec("DELETE FROM registrations_participant_fallback WHERE id=%s AND advisor_email=%s;", [data["id"], guard_advisor])
-
-# ---------- Query/build helpers ----------
+def _insert_participant(first, last, org, size, college, tour, dietary, ada, fee_cents, advisor_email):
+    _, participant_ok = _ensure_flat_tables_if_missing()
+    if participant_ok:
+        ok, msg = _try_exec("""INSERT INTO registrations_participant
+            (first_name,last_name,student_organization,tee_shirt_size,college_company,tour,fee_cents,advisor_email)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s);""",
+            [first,last,org,size,college,tour,fee_cents,advisor_email])
+        if ok:
+            return ok, msg
+    return _try_exec("""INSERT INTO registrations_participant_fallback
+        (first_name,last_name,student_organization,tee_shirt_size,college_company,tour,dietary_restrictions,ada,fee_cents,advisor_email)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);""",
+        [first,last,org,size,college,tour,dietary,ada,fee_cents,advisor_email])
 
 def _select_participants_for_advisor(advisor_email, limit=200):
     if not (advisor_email and "@" in advisor_email):
         return []
-    real = _try_select("""SELECT 'p' as src, id, first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour,created_at
+    real = _try_select("""SELECT first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour,created_at
         FROM registrations_participant
         WHERE advisor_email=%s
         ORDER BY created_at DESC NULLS LAST, id DESC LIMIT %s;""", [advisor_email, limit]) or []
-    fb = _try_select("""SELECT 'f' as src, id, first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour,created_at
+    fb = _try_select("""SELECT first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour,created_at
         FROM registrations_participant_fallback
         WHERE advisor_email=%s
         ORDER BY created_at DESC, id DESC LIMIT %s;""", [advisor_email, limit]) or []
     rows = real + fb
     rows.sort(key=lambda r: (r[-1] or datetime.datetime.min))  # oldest → newest
     rate = f"$ {FEE_USD}"
-    # return tuples including rowkey for actions
-    return [(_rowkey(src, pid), f, l, a, org, sz, col, tr, rate) for (src, pid, f, l, a, org, sz, col, tr, _) in rows]
+    return [(f,l,a,org,sz,col,tr,rate) for (f,l,a,org,sz,col,tr,_) in rows]
 
 def _select_participants_all(limit=2000):
-    real = _try_select("""SELECT 'p' as src, id, first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour,created_at
+    real = _try_select("""SELECT first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour,created_at
                           FROM registrations_participant
                           ORDER BY created_at DESC NULLS LAST, id DESC LIMIT %s;""", [limit]) or []
-    fb   = _try_select("""SELECT 'f' as src, id, first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour,created_at
+    fb   = _try_select("""SELECT first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour,created_at
                           FROM registrations_participant_fallback
                           ORDER BY created_at DESC, id DESC LIMIT %s;""", [limit]) or []
     rows = real + fb
     rows.sort(key=lambda r: (r[-1] or datetime.datetime.min))
     rate = f"$ {FEE_USD}"
-    return [(_rowkey(src, pid), f, l, a, org, sz, col, tr, rate) for (src, pid, f, l, a, org, sz, col, tr, _) in rows]
+    return [(f,l,a,org,sz,col,tr,rate) for (f,l,a,org,sz,col,tr,_) in rows]
 
 def _build_table_and_csv(rows):
     buf = io.StringIO()
     cw = csv.writer(buf)
     cw.writerow(["First","Last","Advisor","Org","Size","College/Company","Tour","Rate"])
-    for (_, f,l,a,org,sz,col,tr,rate) in rows: cw.writerow([f,l,a,org,sz,col,tr,rate])
+    for r in rows: cw.writerow(r)
     csv_text = buf.getvalue()
 
     if rows:
@@ -247,7 +186,7 @@ def _build_table_and_csv(rows):
             f"<tr><td>{escape(f)}</td><td>{escape(l)}</td><td>{escape(a)}</td>"
             f"<td>{escape(org or '')}</td><td>{escape(sz or '')}</td><td>{escape(col or '')}</td>"
             f"<td>{escape(tr or '')}</td><td>{escape(rate)}</td></tr>"
-            for (_, f,l,a,org,sz,col,tr,rate) in rows
+            for (f,l,a,org,sz,col,tr,rate) in rows
         )
         table_html = f"""
         <table aria-label="Participants (sorted oldest→newest)">
@@ -268,30 +207,6 @@ def _send_admin_email(subject, html_body, csv_text, to_addr="studentorgs@mccb.ed
     # Email disabled (stub) to avoid runtime failures
     return True, "(email disabled)"
 
-def _insert_pending_user(first, last, email, category):
-    pending_ok, _ = _ensure_flat_tables_if_missing()
-    if pending_ok:
-        return _try_exec("""INSERT INTO registrations_pendinguser
-            (first_name,last_name,email,category) VALUES (%s,%s,%s,%s)
-            ON CONFLICT (email) DO NOTHING;""", [first,last,email,category])
-    return _try_exec("""INSERT INTO registrations_pending_user_fallback
-        (first_name,last_name,email,category) VALUES (%s,%s,%s,%s)
-        ON CONFLICT (email) DO NOTHING;""", [first,last,email,category])
-
-def _insert_participant(first, last, org, size, college, tour, dietary, ada, fee_cents, advisor_email):
-    _, participant_ok = _ensure_flat_tables_if_missing()
-    if participant_ok:
-        ok, msg = _try_exec("""INSERT INTO registrations_participant
-            (first_name,last_name,student_organization,tee_shirt_size,college_company,tour,fee_cents,advisor_email)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s);""",
-            [first,last,org,size,college,tour,fee_cents,advisor_email])
-        if ok:
-            return ok, msg
-    return _try_exec("""INSERT INTO registrations_participant_fallback
-        (first_name,last_name,student_organization,tee_shirt_size,college_company,tour,dietary_restrictions,ada,fee_cents,advisor_email)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);""",
-        [first,last,org,size,college,tour,dietary,ada,fee_cents,advisor_email])
-
 @csrf_exempt
 def sanity_view(request):
     body = f"""
@@ -305,46 +220,44 @@ def sanity_view(request):
 @csrf_exempt
 def form_view(request):
     advisor_email_url = _safe_get(request.GET, "email", "").strip().lower()
-
     status_block = ""
     summary_html = ""
-    advisor_for_list = advisor_email_url  # which advisor’s rows to show
+    advisor_for_list = advisor_email_url
 
     if request.method == "POST":
-        # FINISH summary (typed advisor preferred; falls back to URL ?email=...)
         if request.POST.get("finish"):
-            admin_mode = _safe_get(request.GET, "all", "").lower() in ("1", "true", "yes")
+            admin_mode = _safe_get(request.GET, "all", "").lower() in ("1","true","yes")
             if admin_mode:
                 rows = _select_participants_all(2000)
-                advisor_label = "All participants"
+                report_tag = "ALL"
             else:
-                typed_adv = _safe_get(request.POST, "advisor_email").strip().lower()
-                effective_adv = typed_adv or advisor_email_url
-                if not (effective_adv and "@" in effective_adv):
-                    status_block = '<div class="card warn" role="alert">Enter your advisor email, then press Finish.</div>'
+                if not (advisor_email_url and "@" in advisor_email_url):
+                    status_block = '<div class="card warn" role="alert">To finish, append ?email=advisor@example.com to the URL so your summary can be shown.</div>'
                     rows = []
-                    advisor_label = "Advisor: (missing)"
+                    report_tag = "MISSING"
                 else:
-                    rows = _select_participants_for_advisor(effective_adv, 500)
-                    advisor_label = f"Advisor: {escape(effective_adv)}"
+                    rows = _select_participants_for_advisor(advisor_email_url, 500)
+                    report_tag = advisor_email_url
 
             table_html, csv_text, cnt, total = _build_table_and_csv(rows)
             summary_html = f"""
             <div class="card success" role="region" aria-label="Finish summary">
               <h2 style="margin-top:0;">Summary (print this for your records)</h2>
-              <p class="muted topbox-text">{advisor_label} · Count: {cnt} · Total: $ {total}</p>
+              <p class="muted topbox-text">{'All participants' if admin_mode else f'Advisor: {escape(advisor_email_url)}'} · Count: {cnt} · Total: $ {total}</p>
               {table_html}
               <div class="print-actions">
                 <a class="btn-primary" style="display:inline-block;padding:.6rem .9rem;border-radius:10px;text-decoration:none;"
                    download="flc_summary.csv"
-                   href={{"data:text/csv;charset=utf-8," + urllib.parse.quote(csv_text)}}>Download CSV</a>
+                   href={"data:text/csv;charset=utf-8," + urllib.parse.quote(csv_text)}>Download CSV</a>
                 <button type="button" class="btn-primary" style="width:auto;max-width:none;" onclick="window.print()">Print Summary</button>
               </div>
             </div>
             """
+            subj = f"FLC registrations – {report_tag} – {cnt} participants"
+            _send_admin_email(subj, summary_html, csv_text, to_addr="studentorgs@mccb.edu")
 
-        # SAVE / SHOW ENTRIES / UPDATE (normal flow)
         else:
+            # Normal form interactions (save OR show entries)
             first   = _safe_get(request.POST, "first_name").strip()
             last    = _safe_get(request.POST, "last_name").strip()
             org     = _safe_get(request.POST, "student_organization").strip()
@@ -353,89 +266,68 @@ def form_view(request):
             tour    = _safe_get(request.POST, "tour").strip()
             dietary = _safe_get(request.POST, "dietary_restrictions").strip()
             ada     = _safe_get(request.POST, "ada").strip()
-            role    = _safe_get(request.POST, "role").strip()  # read but not stored (safe)
             typed_advisor = _safe_get(request.POST, "advisor_email").strip().lower()
 
-            # which advisor’s list to show after POST
-            advisor_for_list = typed_advisor or advisor_email_url
-
-            # Just show entries (no validation)
+            # Button: "Enter email to see previous entries" (no save)
             if request.POST.get("show_entries"):
                 if typed_advisor and "@" in typed_advisor:
+                    advisor_for_list = typed_advisor
                     status_block = f'<div class="card success" role="status">Showing entries for {escape(typed_advisor)}</div>'
                 else:
+                    advisor_for_list = advisor_email_url
                     status_block = '<div class="card warn" role="alert">Enter a valid advisor email to see previous entries.</div>'
-
-            # Insert new row
             else:
+                # Save Participant (require advisor email + first/last)
                 if not (typed_advisor and "@" in typed_advisor):
                     status_block = '<div class="card warn" role="alert">Advisor email is required for each entry.</div>'
                 elif not first or not last:
                     status_block = '<div class="card warn" role="alert">Please provide First and Last name.</div>'
                 else:
-                    ok, msg = _insert_participant(
-                        first, last, org, size, college, tour, dietary, ada, FEE_CENTS, typed_advisor
-                    )
-                    if ok:
-                        status_block = (
-                            f'<div class="card success" role="status" aria-live="polite">'
-                            f'Saved {escape(first)} {escape(last)} (fee $ {FEE_USD})'
-                            f'</div>'
-                        )
-                    else:
-                        status_block = f'<div class="card error" role="alert">DB write failed. Details: {escape(msg)}</div>'
+                    effective_advisor = typed_advisor
+                    advisor_for_list = effective_advisor
+                    ok, msg = _insert_participant(first, last, org, size, college, tour, dietary, ada, FEE_CENTS, effective_advisor)
+                    status_block = (f'<div class="card success" role="status" aria-live="polite">Saved {escape(first)} {escape(last)} (fee $ {FEE_USD})</div>'
+                                    if ok else f'<div class="card error" role="alert">DB write failed. Details: {escape(msg)}</div>')
 
-    # Build advisor-scoped table (simple & stable; supports 8- or 9-tuples)
+    # Recently Added (for whichever advisor is active)
     rows = _select_participants_for_advisor(advisor_for_list, limit=50) if advisor_for_list else []
-    if not rows:
-        part_html = "<p class='muted'>No participants found.</p>"
-    else:
-        body_rows = []
-        for tup in rows:
-            # 9-tuple: (rk,f,l,a,org,sz,col,tr,rate) | 8-tuple: (f,l,a,org,sz,col,tr,rate)
-            if isinstance(tup, (list, tuple)) and len(tup) == 9:
-                _, f, l, a, org, sz, col, tr, rate = tup
-            else:
-                f, l, a, org, sz, col, tr, rate = tup
-            body_rows.append(
-                "<tr>"
-                f"<td>{escape(f)}</td><td>{escape(l)}</td><td>{escape(a)}</td>"
-                f"<td>{escape(org or '')}</td><td>{escape(sz or '')}</td>"
-                f"<td>{escape(col or '')}</td><td>{escape(tr or '')}</td>"
-                f"<td>$ {FEE_USD}</td>"
-                "</tr>"
-            )
-        part_html = f"""
-        <table aria-label="Recently added participants">
-          <thead>
-            <tr>
-              <th>First</th><th>Last</th><th>Advisor</th>
-              <th>Org</th><th>Size</th><th>College/Company</th><th>Tour</th><th>Rate</th>
-            </tr>
-          </thead>
-          <tbody>{''.join(body_rows)}</tbody>
-          <tfoot><tr><td colspan="8" class="muted">Oldest at top, newest at bottom</td></tr></tfoot>
-        </table>
-        """
+    part_html = "<p class='muted'>No participants found.</p>" if not rows else "".join(
+        [
+            f"""
+            <table aria-label="Recently added participants">
+              <thead>
+                <tr>
+                  <th>First</th><th>Last</th><th>Advisor</th>
+                  <th>Org</th><th>Size</th><th>College/Company</th><th>Tour</th><th>Rate</th>
+                </tr>
+              </thead>
+              <tbody>
+            """
+        ]
+        + [
+            f"<tr><td>{escape(f)}</td><td>{escape(l)}</td><td>{escape(a)}</td>"
+            f"<td>{escape(org or '')}</td><td>{escape(sz or '')}</td><td>{escape(col or '')}</td>"
+            f"<td>{escape(tr or '')}</td><td>{escape(rate)}</td></tr>"
+            for (f,l,a,org,sz,col,tr,rate) in rows
+        ]
+        + [
+            """</tbody>
+              <tfoot><tr><td colspan="8" class="muted">Oldest at top, newest at bottom</td></tr></tfoot>
+            </table>
+            """
+        ]
+    )
 
-    # Live estimate banner
-    advisor_count = len(rows) if rows else 0
-    total_est = FEE_USD * advisor_count
-    top_box = f"""
+    # Top box (Finish button on right)
+    top_box = """
       <div class="card warn topbox" role="note">
-        <p class="topbox-text"><strong>Estimated total:</strong> $ {FEE_USD} x {advisor_count} = $ {total_est}</p>
+        <p class="topbox-text"><strong>Finish</strong> shows an on-page summary you can print or download.</p>
         <div class="topbox-spacer"></div>
-        <button type="submit" form="flcform" name="finish" value="1"
-                class="btn-primary btn-finish" aria-label="Finish">Finish</button>
+        <form method="post" style="margin:0;">
+          <button type="submit" name="finish" value="1" class="btn-primary btn-finish" aria-label="Finish">Finish</button>
+        </form>
       </div>
     """
-
-    # Prefill (no edit mode right now)
-    ef = el = eorg = esize = ecol = etour = ediet = eada = erole = ""
-    eadv = advisor_for_list
-
-    def _sel(cur, opt):
-        return ' selected' if (cur or '') == opt else ''
 
     body = f"""
       <h1 id="pageTitle">Fall Leadership Conference Registration</h1>
@@ -444,12 +336,12 @@ def form_view(request):
       {status_block}
       {summary_html}
 
-      <form id="flcform" class="card" method="post" aria-label="Participant add form">
+      <form class="card" method="post" aria-label="Participant add form">
 
         <!-- Row 1 -->
         <div class="row">
-          <div><label for="first_name">First Name</label><input id="first_name" name="first_name" value="{escape(ef)}" required aria-required="true" /></div>
-          <div><label for="last_name">Last Name</label><input id="last_name" name="last_name" value="{escape(el)}" required aria-required="true" /></div>
+          <div><label for="first_name">First Name</label><input id="first_name" name="first_name" required aria-required="true" /></div>
+          <div><label for="last_name">Last Name</label><input id="last_name" name="last_name" required aria-required="true" /></div>
         </div>
 
         <!-- Row 2 -->
@@ -458,19 +350,16 @@ def form_view(request):
             <label for="student_organization">Student Organization</label>
             <select id="student_organization" name="student_organization" aria-label="Student Organization">
               <option value="">(select)</option>
-              <option{_sel(eorg,'DECA')}>DECA</option><option{_sel(eorg,'FBLA')}>FBLA</option>
-              <option{_sel(eorg,'SkillsUSA')}>SkillsUSA</option><option{_sel(eorg,'HOSA')}>HOSA</option>
-              <option{_sel(eorg,'Mississippi Postsecondary Student Organization')}>Mississippi Postsecondary Student Organization</option>
+              <option>DECA</option><option>FBLA</option><option>SkillsUSA</option><option>HOSA</option>
+              <option>Mississippi Postsecondary Student Organization</option>
             </select>
           </div>
           <div>
             <label for="tee_shirt_size">T-Shirt Size</label>
             <select id="tee_shirt_size" name="tee_shirt_size" aria-label="Tee Shirt Size">
               <option value="">(select)</option>
-              <option{_sel(esize,'XSmall')}>XSmall</option><option{_sel(esize,'Small')}>Small</option>
-              <option{_sel(esize,'Medium')}>Medium</option><option{_sel(esize,'Large')}>Large</option>
-              <option{_sel(esize,'XLarge')}>XLarge</option><option{_sel(esize,'2XLarge')}>2XLarge</option>
-              <option{_sel(esize,'3XLarge')}>3XLarge</option><option{_sel(esize,'4XLarge')}>4XLarge</option>
+              <option>XSmall</option><option>Small</option><option>Medium</option><option>Large</option>
+              <option>XLarge</option><option>2XLarge</option><option>3XLarge</option><option>4XLarge</option>
             </select>
           </div>
         </div>
@@ -481,35 +370,35 @@ def form_view(request):
             <label for="college_company">College/Chapter</label>
             <select id="college_company" name="college_company" aria-label="College or Company">
               <option value="">(select)</option>
-              <option{_sel(ecol,'Coahoma Community College')}>Coahoma Community College</option>
-              <option{_sel(ecol,'Copiah-Lincoln Community College')}>Copiah-Lincoln Community College</option>
-              <option{_sel(ecol,'Delta State University')}>Delta State University</option>
-              <option{_sel(ecol,'East Central Community College')}>East Central Community College</option>
-              <option{_sel(ecol,'East Mississippi Community College - Mayhew')}>East Mississippi Community College - Mayhew</option>
-              <option{_sel(ecol,'East Mississippi Community College - Scooba')}>East Mississippi Community College - Scooba</option>
-              <option{_sel(ecol,'Hinds Community College - Raymond')}>Hinds Community College - Raymond</option>
-              <option{_sel(ecol,'Hinds Community College - Utica')}>Hinds Community College - Utica</option>
-              <option{_sel(ecol,'Holmes Community College')}>Holmes Community College</option>
-              <option{_sel(ecol,'Jones College')}>Jones College</option>
-              <option{_sel(ecol,'Mississippi Delta Community College')}>Mississippi Delta Community College</option>
-              <option{_sel(ecol,'Mississippi Gulf Coast Community College - Harrison')}>Mississippi Gulf Coast Community College - Harrison</option>
-              <option{_sel(ecol,'Mississippi State University College of Business')}>Mississippi State University College of Business</option>
-              <option{_sel(ecol,'Mississippi University for Women')}>Mississippi University for Women</option>
-              <option{_sel(ecol,'Northeast Mississippi Community College')}>Northeast Mississippi Community College</option>
-              <option{_sel(ecol,'Southwest Mississippi Community College')}>Southwest Mississippi Community College</option>
-              <option{_sel(ecol,'Tougaloo College')}>Tougaloo College</option>
-              <option{_sel(ecol,'University of Mississippi - Desoto')}>University of Mississippi - Desoto</option>
-              <option{_sel(ecol,'Mississippi Community College Board')}>Mississippi Community College Board</option>
-              <option{_sel(ecol,'Other')}>Other</option>
+              <option>Coahoma Community College</option>
+              <option>Copiah-Lincoln Community College</option>
+              <option>Delta State University</option>
+              <option>East Central Community College</option>
+              <option>East Mississippi Community College - Mayhew</option>
+              <option>East Mississippi Community College - Scooba</option>
+              <option>Hinds Community College - Raymond</option>
+              <option>Hinds Community College - Utica</option>
+              <option>Holmes Community College</option>
+              <option>Jones College</option>
+              <option>Mississippi Delta Community College</option>
+              <option>Mississippi Gulf Coast Community College - Harrison</option>
+              <option>Mississippi State University College of Business</option>
+              <option>Mississippi University for Women</option>
+              <option>Northeast Mississippi Community College</option>
+              <option>Southwest Mississippi Community College</option>
+              <option>Tougaloo College</option>
+              <option>University of Mississippi - Desoto</option>
+              <option>Mississippi Community College Board</option>
+              <option>Other</option>
             </select>
           </div>
           <div>
             <label for="tour">Tour</label>
             <select id="tour" name="tour" aria-label="Tour selection">
               <option value="">(select)</option>
-              <option{_sel(etour,'Haley Barbour Center for Manufacturing Excellence')}>Haley Barbour Center for Manufacturing Excellence</option>
-              <option{_sel(etour,'The Jim and Thomas Duff Center for Science and Technology Innovation')}>The Jim and Thomas Duff Center for Science and Technology Innovation</option>
-              <option{_sel(etour,'No Tour')}>No Tour</option>
+              <option>Haley Barbour Center for Manufacturing Excellence</option>
+              <option>The Jim and Thomas Duff Center for Science and Technology Innovation</option>
+              <option>No Tour</option>
             </select>
           </div>
         </div>
@@ -518,29 +407,23 @@ def form_view(request):
         <div class="row">
           <div>
             <label for="dietary_restrictions">Dietary Restrictions</label>
-            <input id="dietary_restrictions" name="dietary_restrictions" value="{escape(ediet)}" placeholder="e.g., vegetarian, gluten-free" />
+            <input id="dietary_restrictions" name="dietary_restrictions" placeholder="e.g., vegetarian, gluten-free" />
           </div>
           <div>
             <label for="ada">ADA Accommodations</label>
-            <input id="ada" name="ada" value="{escape(eada)}" placeholder="e.g., mobility assistance, interpreter" />
+            <input id="ada" name="ada" placeholder="e.g., mobility assistance, interpreter" />
           </div>
         </div>
 
-        <!-- Row 5 (Role + Advisor Email) -->
+        <!-- Row 5 -->
         <div class="row">
           <div>
-            <label for="role">Role</label>
-            <select id="role" name="role" aria-label="Role">
-              <option value="">(select)</option>
-              <option{_sel(erole,'Advisor')}>Advisor</option>
-              <option{_sel(erole,'Student')}>Student</option>
-              <option{_sel(erole,'Other')}>Other</option>
-            </select>
+            <label for="fee">Fee (USD)</label>
+            <input id="fee" name="fee" value="$ {FEE_USD}" inputmode="numeric" aria-readonly="true" readonly />
           </div>
           <div>
             <label for="advisor_email">Advisor Email</label>
-            <input id="advisor_email" name="advisor_email" value="{escape(eadv)}"
-                   placeholder="Advisor email REQUIRED for each entry." required />
+            <input id="advisor_email" name="advisor_email" placeholder="Advisor email REQUIRED for each entry." value="" required />
           </div>
         </div>
 
@@ -558,8 +441,6 @@ def form_view(request):
       </div>
     """
     return _html_page("Fall Leadership Conference Registration", body)
-
-
 
 @csrf_exempt
 def manage_pending_users_view(request):
@@ -629,3 +510,13 @@ def manage_pending_users_view(request):
       </div>
     """
     return _html_page("Manage Pending Users", body)
+
+def _insert_pending_user(first, last, email, category):
+    pending_ok, _ = _ensure_flat_tables_if_missing()
+    if pending_ok:
+        return _try_exec("""INSERT INTO registrations_pendinguser
+            (first_name,last_name,email,category) VALUES (%s,%s,%s,%s)
+            ON CONFLICT (email) DO NOTHING;""", [first,last,email,category])
+    return _try_exec("""INSERT INTO registrations_pending_user_fallback
+        (first_name,last_name,email,category) VALUES (%s,%s,%s,%s)
+        ON CONFLICT (email) DO NOTHING;""", [first,last,email,category])

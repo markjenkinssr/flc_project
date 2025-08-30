@@ -1,10 +1,8 @@
-.clean/
 .venv/
-venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.sqlite3
 .env
-staticfiles/
-env.txt
-.env
-.env.*
+*.env

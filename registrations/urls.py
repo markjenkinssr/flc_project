@@ -1,13 +1,8 @@
 from django.urls import path
-from . import views_full as vr  # <- real views
-
-app_name = "registrations"
+from . import views_flat as views
 
 urlpatterns = [
-    path("sanity/", vr.sanity_view, name="sanity"),
-    path("user-access/", vr.user_access_view, name="user_access"),
-    path("form/<int:user_id>/", vr.registration_form_view, name="registration_form"),
-    path("finish/<int:user_id>/", vr.finish_session_view, name="finish_session"),
-    path("manage-pending-users/", vr.manage_pending_users, name="manage_pending_users"),
-    path("ajax/names/", vr.get_names_by_category, name="ajax_names"),
+    path("sanity/", views.sanity_view, name="registrations_sanity"),
+    path("form/", views.form_view, name="registrations_form"),
+    path("manage-pending-users/", views.manage_pending_users_view, name="registrations_manage_pending_users"),
 ]
