@@ -141,46 +141,59 @@ def _ensure_flat_tables_if_missing():
 
 def _build_table_and_csv(rows):
     """
-    rows: list of either 8-tuple (f,l,a,org,sz,col,tr,rate)
-          or 9-tuple (rk,f,l,a,org,sz,col,tr,rate)
+    Accepts rows shaped as:
+      - 10-tuple: (rk,f,l,a,role,org,sz,col,tr,rate)
+      - 9-tuple:  (f,l,a,role,org,sz,col,tr,rate)  [older path]
+      - 8-tuple:  (f,l,a,org,sz,col,tr,rate)       [no role]
     Returns: (html_table, csv_text, count, total_dollars)
     """
+    csv_head = "First,Last,Advisor,Role,Organization,Size,College/Company,Tour,Rate"
+    csv_lines = [csv_head]
     out = []
-    csv_lines = ["First,Last,Advisor,Organization,Size,College/Company,Tour,Rate"]
     count = 0
+
     for tup in rows or []:
-        if isinstance(tup, (list, tuple)) and len(tup) == 9:
-            _, f, l, a, org, sz, col, tr, rate = tup
+        rk = None
+        if len(tup) == 10:
+            rk, f, l, a, role, org, sz, col, tr, rate = tup
+        elif len(tup) == 9:
+            # (f,l,a,role,org,sz,col,tr,rate)
+            f, l, a, role, org, sz, col, tr, rate = tup
         else:
+            # (f,l,a,org,sz,col,tr,rate)
             f, l, a, org, sz, col, tr, rate = tup
+            role = ""
+
         rate = int(rate) if str(rate).isdigit() else FEE_USD
+
         out.append(
             "<tr>"
             f"<td>{escape(f)}</td><td>{escape(l)}</td><td>{escape(a)}</td>"
-            f"<td>{escape(org or '')}</td><td>{escape(sz or '')}</td>"
-            f"<td>{escape(col or '')}</td><td>{escape(tr or '')}</td>"
-            f"<td>$ {rate}</td>"
+            f"<td>{escape(role or '')}</td><td>{escape(org or '')}</td><td>{escape(sz or '')}</td>"
+            f"<td>{escape(col or '')}</td><td>{escape(tr or '')}</td><td>$ {rate}</td>"
             "</tr>"
         )
         csv_lines.append(",".join([
-            f.replace(","," "), l.replace(","," "), a.replace(","," "),
-            (org or "").replace(","," "), (sz or "").replace(","," "),
-            (col or "").replace(","," "), (tr or "").replace(","," "),
-            str(rate)
+            f.replace(",", " "), l.replace(",", " "), a.replace(",", " "),
+            (role or "").replace(",", " "), (org or "").replace(",", " "),
+            (sz or "").replace(",", " "), (col or "").replace(",", " "),
+            (tr or "").replace(",", " "), str(rate)
         ]))
         count += 1
+
     total = FEE_USD * count
     table = (
         "<table aria-label='Summary' style='font-size:.92rem;'>"
         "<thead><tr>"
-        "<th>First</th><th>Last</th><th>Advisor</th><th>Org</th>"
-        "<th>Size</th><th>College/Company</th><th>Tour</th><th>Rate</th>"
+        "<th>First</th><th>Last</th><th>Advisor</th><th>Role</th>"
+        "<th>Org</th><th>Size</th><th>College/Company</th><th>Tour</th><th>Rate</th>"
         "</tr></thead>"
-        f"<tbody>{''.join(out) or '<tr><td colspan=8 class=muted>None</td></tr>'}</tbody>"
-        f"<tfoot><tr><td colspan=8 class='muted'>Total: $ {total}</td></tr></tfoot>"
+        f"<tbody>{''.join(out) or '<tr><td colspan=9 class=muted>None</td></tr>'}</tbody>"
+        f"<tfoot><tr><td colspan=9 class='muted'>Total: $ {total}</td></tr></tfoot>"
         "</table>"
     )
     return table, "\n".join(csv_lines) + "\n", count, total
+
 
 
 def _select_participants_for_advisor(advisor_email, limit=50):
@@ -350,91 +363,214 @@ def _delete_participant(rowkey, guard_advisor):
 
 # ---------- Query/build helpers ----------
 
-def _select_participants_for_advisor(advisor_email, limit=200):
-    if not (advisor_email and "@" in advisor_email):
-        return []
-    real = _try_select("""SELECT 'p' as src, id, first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour,created_at
-        FROM registrations_participant
-        WHERE advisor_email=%s
-        ORDER BY created_at DESC NULLS LAST, id DESC LIMIT %s;""", [advisor_email, limit]) or []
-    fb = _try_select("""SELECT 'f' as src, id, first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour,created_at
-        FROM registrations_participant_fallback
-        WHERE advisor_email=%s
-        ORDER BY created_at DESC, id DESC LIMIT %s;""", [advisor_email, limit]) or []
-    rows = real + fb
-    rows.sort(key=lambda r: (r[-1] or datetime.datetime.min))  # oldest → newest
-    rate = f"$ {FEE_USD}"
-    # return tuples including rowkey for actions
-    return [(_rowkey(src, pid), f, l, a, org, sz, col, tr, rate) for (src, pid, f, l, a, org, sz, col, tr, _) in rows]
+# ---- ROLE + DB helpers (paste whole block) ----------------------------------
 
-def _select_participants_all(limit=2000):
-    real = _try_select("""SELECT 'p' as src, id, first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour,created_at
-                          FROM registrations_participant
-                          ORDER BY created_at DESC NULLS LAST, id DESC LIMIT %s;""", [limit]) or []
-    fb   = _try_select("""SELECT 'f' as src, id, first_name,last_name,advisor_email,student_organization,tee_shirt_size,college_company,tour,created_at
-                          FROM registrations_participant_fallback
-                          ORDER BY created_at DESC, id DESC LIMIT %s;""", [limit]) or []
-    rows = real + fb
-    rows.sort(key=lambda r: (r[-1] or datetime.datetime.min))
-    rate = f"$ {FEE_USD}"
-    return [(_rowkey(src, pid), f, l, a, org, sz, col, tr, rate) for (src, pid, f, l, a, org, sz, col, tr, _) in rows]
+def _add_column_if_missing(table: str, col: str, coltype: str):
+    # Uses Postgres IF NOT EXISTS; harmless if already present.
+    return _try_exec(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {coltype};')
 
-def _build_table_and_csv(rows):
-    buf = io.StringIO()
-    cw = csv.writer(buf)
-    cw.writerow(["First","Last","Advisor","Org","Size","College/Company","Tour","Rate"])
-    for (_, f,l,a,org,sz,col,tr,rate) in rows: cw.writerow([f,l,a,org,sz,col,tr,rate])
-    csv_text = buf.getvalue()
 
-    if rows:
-        items = "".join(
-            f"<tr><td>{escape(f)}</td><td>{escape(l)}</td><td>{escape(a)}</td>"
-            f"<td>{escape(org or '')}</td><td>{escape(sz or '')}</td><td>{escape(col or '')}</td>"
-            f"<td>{escape(tr or '')}</td><td>{escape(rate)}</td></tr>"
-            for (_, f,l,a,org,sz,col,tr,rate) in rows
+def _ensure_flat_tables_if_missing():
+    """
+    Prefer existing app tables if present.
+    If not, create ultra-simple fallback tables to avoid 500s:
+      - registrations_pending_user_fallback
+      - registrations_participant_fallback
+    Also ensure the 'role' column exists in real & fallback participant tables.
+    """
+    pending_ok = _try_select("SELECT 1 FROM registrations_pendinguser LIMIT 1") is not None
+    participant_ok = _try_select("SELECT 1 FROM registrations_participant LIMIT 1") is not None
+
+    if not pending_ok:
+        _try_exec(
+            """
+            CREATE TABLE IF NOT EXISTS registrations_pending_user_fallback (
+                id SERIAL PRIMARY KEY,
+                first_name TEXT NOT NULL,
+                last_name  TEXT NOT NULL,
+                email      TEXT NOT NULL UNIQUE,
+                category   TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
         )
-        table_html = f"""
-        <table aria-label="Participants (sorted oldest→newest)">
-          <thead><tr>
-            <th>First</th><th>Last</th><th>Advisor</th>
-            <th>Org</th><th>Size</th><th>College/Company</th><th>Tour</th><th>Rate</th>
-          </tr></thead>
-          <tbody>{items}</tbody>
-          <tfoot><tr><td colspan="8" class="muted">Total participants: {len(rows)} · Total fees: $ {len(rows)*FEE_USD}</td></tr></tfoot>
-        </table>
-        """
-    else:
-        table_html = "<p class='muted'>No participants found.</p>"
+    if not participant_ok:
+        _try_exec(
+            """
+            CREATE TABLE IF NOT EXISTS registrations_participant_fallback (
+                id SERIAL PRIMARY KEY,
+                first_name TEXT NOT NULL,
+                last_name  TEXT NOT NULL,
+                role       TEXT,
+                student_organization TEXT,
+                tee_shirt_size TEXT,
+                college_company TEXT,
+                tour TEXT,
+                fee_cents INTEGER NOT NULL DEFAULT 4500,
+                advisor_email TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
+        )
 
-    return table_html, csv_text, len(rows), len(rows)*FEE_USD
+    # Ensure 'role' column even if old tables already existed
+    _add_column_if_missing("registrations_participant", "role", "TEXT")
+    _add_column_if_missing("registrations_participant_fallback", "role", "TEXT")
 
-def _send_admin_email(subject, html_body, csv_text, to_addr="studentorgs@mccb.edu"):
-    # Email disabled (stub) to avoid runtime failures
-    return True, "(email disabled)"
+    return pending_ok, participant_ok
 
-def _insert_pending_user(first, last, email, category):
-    pending_ok, _ = _ensure_flat_tables_if_missing()
-    if pending_ok:
-        return _try_exec("""INSERT INTO registrations_pendinguser
-            (first_name,last_name,email,category) VALUES (%s,%s,%s,%s)
-            ON CONFLICT (email) DO NOTHING;""", [first,last,email,category])
-    return _try_exec("""INSERT INTO registrations_pending_user_fallback
-        (first_name,last_name,email,category) VALUES (%s,%s,%s,%s)
-        ON CONFLICT (email) DO NOTHING;""", [first,last,email,category])
 
-def _insert_participant(first, last, org, size, college, tour, dietary, ada, fee_cents, advisor_email):
+def _insert_participant(first, last, org, size, college, tour, dietary, ada, fee_cents, advisor_email, role):
+    """
+    Insert participant into real table if present, else into fallback.
+    dietary/ada are currently ignored at DB level (not breaking schema).
+    """
     _, participant_ok = _ensure_flat_tables_if_missing()
+
     if participant_ok:
-        ok, msg = _try_exec("""INSERT INTO registrations_participant
-            (first_name,last_name,student_organization,tee_shirt_size,college_company,tour,fee_cents,advisor_email)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s);""",
-            [first,last,org,size,college,tour,fee_cents,advisor_email])
+        ok, msg = _try_exec(
+            """
+            INSERT INTO registrations_participant
+            (first_name, last_name, role, student_organization, tee_shirt_size, college_company, tour, fee_cents, advisor_email)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s);
+            """,
+            [first, last, role, org, size, college, tour, fee_cents, advisor_email],
+        )
         if ok:
             return ok, msg
-    return _try_exec("""INSERT INTO registrations_participant_fallback
-        (first_name,last_name,student_organization,tee_shirt_size,college_company,tour,dietary_restrictions,ada,fee_cents,advisor_email)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);""",
-        [first,last,org,size,college,tour,dietary,ada,fee_cents,advisor_email])
+
+    # Fallback
+    return _try_exec(
+        """
+        INSERT INTO registrations_participant_fallback
+        (first_name, last_name, role, student_organization, tee_shirt_size, college_company, tour, fee_cents, advisor_email)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s);
+        """,
+        [first, last, role, org, size, college, tour, fee_cents, advisor_email],
+    )
+
+
+def _select_participants_for_advisor(advisor_email, limit=50):
+    """
+    Return rows as 10-tuples so Actions can work:
+      (rk, first, last, advisor, role, org, size, college, tour, rate)
+    """
+    if not advisor_email:
+        return []
+
+    rows = _try_select(
+        """
+        SELECT 'p:'||id AS rk, first_name, last_name, advisor_email,
+               COALESCE(role,''), COALESCE(student_organization,''), COALESCE(tee_shirt_size,''), COALESCE(college_company,''), COALESCE(tour,''),
+               (fee_cents/100)
+        FROM registrations_participant
+        WHERE LOWER(advisor_email)=LOWER(%s)
+        ORDER BY created_at ASC, id ASC
+        LIMIT %s
+        """,
+        [advisor_email, limit],
+    )
+    if rows is not None:
+        return rows
+
+    rows = _try_select(
+        """
+        SELECT 'pf:'||id AS rk, first_name, last_name, advisor_email,
+               COALESCE(role,''), COALESCE(student_organization,''), COALESCE(tee_shirt_size,''), COALESCE(college_company,''), COALESCE(tour,''),
+               (fee_cents/100)
+        FROM registrations_participant_fallback
+        WHERE LOWER(advisor_email)=LOWER(%s)
+        ORDER BY created_at ASC, id ASC
+        LIMIT %s
+        """,
+        [advisor_email, limit],
+    )
+    return rows or []
+
+
+def _select_participants_all(limit=2000):
+    rows = _try_select(
+        """
+        SELECT 'p:'||id AS rk, first_name, last_name, advisor_email,
+               COALESCE(role,''), COALESCE(student_organization,''), COALESCE(tee_shirt_size,''), COALESCE(college_company,''), COALESCE(tour,''),
+               (fee_cents/100)
+        FROM registrations_participant
+        ORDER BY created_at ASC, id ASC
+        LIMIT %s
+        """,
+        [limit],
+    )
+    if rows is not None:
+        return rows
+
+    rows = _try_select(
+        """
+        SELECT 'pf:'||id AS rk, first_name, last_name, advisor_email,
+               COALESCE(role,''), COALESCE(student_organization,''), COALESCE(tee_shirt_size,''), COALESCE(college_company,''), COALESCE(tour,''),
+               (fee_cents/100)
+        FROM registrations_participant_fallback
+        ORDER BY created_at ASC, id ASC
+        LIMIT %s
+        """,
+        [limit],
+    )
+    return rows or []
+
+
+def _build_table_and_csv(rows):
+    """
+    Normalize to one of:
+      10-tuple: (rk,f,l,a,role,org,sz,col,tr,rate)
+       9-tuple: (f,l,a,role,org,sz,col,tr,rate)
+       8-tuple: (f,l,a,org,sz,col,tr,rate)
+    Returns: (html_table, csv_text, count, total_dollars)
+    """
+    csv_head = "First,Last,Advisor,Role,Organization,Size,College/Company,Tour,Rate"
+    csv_lines = [csv_head]
+    out = []
+    count = 0
+
+    for tup in rows or []:
+        if len(tup) == 10:
+            rk, f, l, a, role, org, sz, col, tr, rate = tup
+        elif len(tup) == 9:
+            f, l, a, role, org, sz, col, tr, rate = tup
+        else:
+            f, l, a, org, sz, col, tr, rate = tup
+            role = ""
+
+        rate = int(rate) if str(rate).isdigit() else FEE_USD
+
+        out.append(
+            "<tr>"
+            f"<td>{escape(f)}</td><td>{escape(l)}</td><td>{escape(a)}</td>"
+            f"<td>{escape(role or '')}</td><td>{escape(org or '')}</td><td>{escape(sz or '')}</td>"
+            f"<td>{escape(col or '')}</td><td>{escape(tr or '')}</td><td>$ {rate}</td>"
+            "</tr>"
+        )
+        csv_lines.append(",".join([
+            f.replace(",", " "), l.replace(",", " "), a.replace(",", " "),
+            (role or "").replace(",", " "), (org or "").replace(",", " "),
+            (sz or "").replace(",", " "), (col or "").replace(",", " "),
+            (tr or "").replace(",", " "), str(rate)
+        ]))
+        count += 1
+
+    total = FEE_USD * count
+    table = (
+        "<table aria-label='Summary' style='font-size:.92rem;'>"
+        "<thead><tr>"
+        "<th>First</th><th>Last</th><th>Advisor</th><th>Role</th>"
+        "<th>Org</th><th>Size</th><th>College/Company</th><th>Tour</th><th>Rate</th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(out) or '<tr><td colspan=9 class=muted>None</td></tr>'}</tbody>"
+        f"<tfoot><tr><td colspan=9 class='muted'>Total: $ {total}</td></tr></tfoot>"
+        "</table>"
+    )
+    return table, "\n".join(csv_lines) + "\n", count, total
+
+# ---- END ROLE + DB helpers ---------------------------------------------------
+
 
 @csrf_exempt
 def sanity_view(request):
@@ -509,7 +645,7 @@ def form_view(request):
             tour    = _safe_get(request.POST, "tour").strip()
             dietary = _safe_get(request.POST, "dietary_restrictions").strip()
             ada     = _safe_get(request.POST, "ada").strip()
-            role    = _safe_get(request.POST, "role").strip()  # read-only for now
+            role    = _safe_get(request.POST, "role").strip()  # read-only or saved depending on your insert
             typed_advisor = _safe_get(request.POST, "advisor_email").strip().lower()
 
             # whose list to show after POST
@@ -530,12 +666,16 @@ def form_view(request):
                     status_block = '<div class="card warn" role="alert">Please provide First and Last name.</div>'
                 else:
                     ok, msg = _insert_participant(
-                        first, last, org, size, college, tour, dietary, ada, FEE_CENTS, typed_advisor
+                        first, last, org, size, college, tour, dietary, ada, FEE_CENTS, typed_advisor, role
                     )
-                    status_block = (
-                        f'<div class="card success" role="status" aria-live="polite">Saved {escape(first)} {escape(last)} (fee $ {FEE_USD})</div>'
-                        if ok else f'<div class="card error" role="alert">DB write failed. Details: {escape(msg)}</div>'
-                    )
+                    if ok:
+                        status_block = (
+                            f'<div class="card success" role="status" aria-live="polite">'
+                            f'Saved {escape(first)} {escape(last)} (fee $ {FEE_USD})'
+                            f'</div>'
+                        )
+                    else:
+                        status_block = f'<div class="card error" role="alert">DB write failed. Details: {escape(msg)}</div>'
 
 
     # Build advisor-scoped table (simple & stable; supports 8- or 9-tuples)
@@ -545,42 +685,60 @@ def form_view(request):
         part_html = "<p class='muted'>No participants found.</p>"
     else:
         body_rows = []
+        sample = rows[0]
+        # Normalize to (rk,f,l,a,role,org,sz,col,tr,rate) for rendering
         for tup in rows:
-            # 9-tuple with rowkey
-            rk, f, l, a, org, sz, col, tr, rate = tup
+            if len(tup) == 10:
+                rk, f, l, a, role, org, sz, col, tr, rate = tup
+            elif len(tup) == 9:
+                # (f,l,a,role,org,sz,col,tr,rate) – older path
+                f, l, a, role, org, sz, col, tr, rate = tup
+                rk = None
+            else:
+                # (f,l,a,org,sz,col,tr,rate) – no role
+                f, l, a, org, sz, col, tr, rate = tup
+                rk = None
+                role = ""
+
+            actions_cell = ""
+            if rk:
+                actions_cell = (
+                    "<td class='actions'>"
+                    "<form class='inline' method='get' style='display:inline-block;margin:0 4px;'>"
+                    f"  <input type='hidden' name='email' value='{escape(advisor_for_list or '')}'/>"
+                    f"  <input type='hidden' name='edit' value='{escape(rk)}'/>"
+                    "  <button type='submit' class='btn-muted' aria-label='Edit'>Edit</button>"
+                    "</form>"
+                    "<form class='inline' method='post' style='display:inline-block;margin:0 4px;'>"
+                    f"  <input type='hidden' name='advisor_email' value='{escape(advisor_for_list or '')}'/>"
+                    f"  <input type='hidden' name='delete_row' value='{escape(rk)}'/>"
+                    "  <button type='submit' class='btn-danger' aria-label='Delete'>Delete</button>"
+                    "</form>"
+                    "</td>"
+                )
+
             body_rows.append(
                 "<tr>"
                 f"<td>{escape(f)}</td><td>{escape(l)}</td><td>{escape(a)}</td>"
-                f"<td>{escape(org or '')}</td><td>{escape(sz or '')}</td>"
-                f"<td>{escape(col or '')}</td><td>{escape(tr or '')}</td>"
-                f"<td>$ {FEE_USD}</td>"
-                "<td class='actions'>"
-                "<form class='inline' method='get' style='display:inline-block;margin:0 4px;'>"
-                f"  <input type='hidden' name='email' value='{escape(advisor_for_list or '')}'/>"
-                f"  <input type='hidden' name='edit' value='{escape(rk)}'/>"
-                "  <button type='submit' class='btn-muted' aria-label='Edit'>Edit</button>"
-                "</form>"
-                "<form class='inline' method='post' style='display:inline-block;margin:0 4px;'>"
-                f"  <input type='hidden' name='advisor_email' value='{escape(advisor_for_list or '')}'/>"
-                f"  <input type='hidden' name='delete_row' value='{escape(rk)}'/>"
-                "  <button type='submit' class='btn-danger' aria-label='Delete'>Delete</button>"
-                "</form>"
-                "</td>"
-                "</tr>"
+                f"<td>{escape(role or '')}</td><td>{escape(org or '')}</td><td>{escape(sz or '')}</td>"
+                f"<td>{escape(col or '')}</td><td>{escape(tr or '')}</td><td>$ {FEE_USD}</td>"
+                + (actions_cell or "<td></td>")
+                + "</tr>"
             )
 
         part_html = f"""
         <table aria-label="Recently added participants" style="font-size:.92rem;">
           <thead>
             <tr>
-              <th>First</th><th>Last</th><th>Advisor</th>
+              <th>First</th><th>Last</th><th>Advisor</th><th>Role</th>
               <th>Org</th><th>Size</th><th>College/Company</th><th>Tour</th><th>Rate</th><th>Actions</th>
             </tr>
           </thead>
           <tbody>{''.join(body_rows)}</tbody>
-          <tfoot><tr><td colspan="9" class="muted">Oldest at top, newest at bottom</td></tr></tfoot>
+          <tfoot><tr><td colspan="10" class="muted">Oldest at top, newest at bottom</td></tr></tfoot>
         </table>
         """
+
 
 
     # Live estimate banner
