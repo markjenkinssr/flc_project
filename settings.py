@@ -97,16 +97,42 @@ WSGI_APPLICATION = 'wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
+import os
+from urllib.parse import urlparse, parse_qs
+
+def _db_from_url(url: str):
+    p = urlparse(url)
+    q = parse_qs(p.query or "")
+    opts = {}
+    if 'sslmode' in q:
+        opts['sslmode'] = q['sslmode'][0]
+    return {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'flc_dev',       # local DB name
-        'USER': 'postgres',
-        'PASSWORD': 'StudentOrg1!',
-        'HOST': 'localhost',     # or Azure host
-        'PORT': '5432',
+        'NAME': (p.path or '').lstrip('/'),
+        'USER': p.username or '',
+        'PASSWORD': p.password or '',
+        'HOST': p.hostname or '',
+        'PORT': str(p.port or '5432'),
+        'OPTIONS': opts,
     }
-}
+
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+if DATABASE_URL:
+    DATABASES = {'default': _db_from_url(DATABASE_URL)}
+else:
+    # Fallback to your current local dev settings if no env provided
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': 'flc_dev',
+            'USER': 'postgres',
+            'PASSWORD': 'StudentOrg1!',
+            'HOST': 'localhost',
+            'PORT': '5432',
+        }
+    }
+
 
 # settings.py
 
