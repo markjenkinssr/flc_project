@@ -1,0 +1,228 @@
+from django.http import HttpResponse, HttpResponseRedirect
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+
+SESSION_KEY = "reg_participants_flat"
+
+def _get_rows(request):
+    return request.session.get(SESSION_KEY, [])
+
+def _save_rows(request, rows):
+    request.session[SESSION_KEY] = rows
+    # 30 days
+    request.session.set_expiry(60 * 60 * 24 * 30)
+
+HTML_TOP = """<!doctype html>
+<html lang="en" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <title>FLC Registration</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark">
+  <style>
+    :root { --gap: 1.25rem; --pad: 1.25rem; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#fff; }
+    .container { max-width: 960px; margin: 2rem auto; padding: 0 var(--pad); }
+
+    /* More space between the two columns */
+    .row { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
+           column-gap: var(--gap); row-gap: var(--gap); }
+
+    .col-6 { grid-column: span 6; min-width: 0; }
+    .col-12 { grid-column: span 12; }
+    .right { text-align:right; }
+
+    .card { border: 1px solid #ddd; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.06); background:#fff; }
+    .card-header { padding: .9rem var(--pad); font-weight: 600; border-bottom: 1px solid #eee; }
+    /* More inner padding so fields don’t touch the right edge */
+    .card-body { padding: var(--pad); }
+
+    .form-label { display:block; font-size:.9rem; margin-bottom:.35rem; }
+    .form-control, .form-select {
+      width:100%; padding:.6rem .75rem; border:1px solid #ccc; border-radius:8px;
+      min-width:0; /* never overflow columns */
+    }
+
+    .btn { display:inline-block; padding:.55rem .9rem; border-radius:10px; border:1px solid #0d6efd; background:#0d6efd; color:#fff; text-decoration:none; cursor:pointer; }
+    .btn-success { border-color:#198754; background:#198754; }
+
+    .alert { display:flex; justify-content:space-between; align-items:center; gap:1rem;
+             padding:.85rem var(--pad); border:1px solid #bfe3ff; background:#eaf6ff; border-radius:12px; }
+
+    .table-responsive { overflow-x:auto; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { padding:.7rem .6rem; border-bottom: 1px solid #eee; font-size:.95rem; }
+    th { text-align:left; background:#fafafa; }
+    .text-muted { color:#666; }
+
+    /* On narrow screens, stack the two columns so nothing overflows */
+    @media (max-width: 768px) {
+      .col-6 { grid-column: span 12; }
+      .right { text-align:left; }
+    }
+  </style>
+</head>
+<body>
+  <main class="container" role="main" aria-labelledby="pageTitle">
+    <div class="row" style="align-items:center; margin-bottom:1rem;">
+      <div class="col-6">
+        <h1 id="pageTitle" class="h2" style="margin:0;">FLC Registration for Advisor User</h1>
+      </div>
+      <div class="col-6 right">
+        <a href="#summary" class="btn btn-success" aria-label="Finish and view summary">Finish &amp; Summary</a>
+      </div>
+    </div>
+"""
+
+HTML_ALERT = """    <div class="alert" role="status" aria-live="polite">
+      <div>
+        <div>Fee per participant: <strong>${fee}</strong></div>
+        <div>Current total: <strong>{count} × ${fee} = ${total}</strong></div>
+      </div>
+      <div class="right" aria-hidden="true">
+        <span>Participants: {count}</span>
+      </div>
+    </div>
+"""
+
+HTML_FORM = """    <section class="card" aria-labelledby="addParticipantHeader">
+      <div class="card-header" id="addParticipantHeader">Add Participant</div>
+      <div class="card-body">
+        <form method="post" novalidate aria-describedby="formHelp">
+          <div class="row">
+            <div class="col-6">
+              <label for="first_name" class="form-label">First Name</label>
+              <input class="form-control" id="first_name" name="first_name" aria-label="First name" autocomplete="off" />
+            </div>
+            <div class="col-6">
+              <label for="last_name" class="form-label">Last Name</label>
+              <input class="form-control" id="last_name" name="last_name" aria-label="Last name" autocomplete="off" />
+            </div>
+
+            <div class="col-6">
+              <label for="student_organization" class="form-label">Student Organization</label>
+              <input class="form-control" id="student_organization" name="student_organization" aria-label="Student organization" autocomplete="off" />
+            </div>
+            <div class="col-6">
+              <label for="college_company" class="form-label">College/Company</label>
+              <input class="form-control" id="college_company" name="college_company" aria-label="College or company" autocomplete="off" />
+            </div>
+
+            <div class="col-6">
+              <label for="tour" class="form-label">Tour</label>
+              <select class="form-select" id="tour" name="tour" aria-label="Tour">
+                <option value="">Select…</option>
+                <option>Campus</option>
+                <option>Lab</option>
+                <option>Museum</option>
+              </select>
+            </div>
+            <div class="col-6">
+              <label for="tee_shirt_size" class="form-label">T-shirt size</label>
+              <select class="form-select" id="tee_shirt_size" name="tee_shirt_size" aria-label="T-shirt size">
+                <option value="">Select…</option>
+                <option>XS</option><option>S</option><option>M</option><option>L</option><option>XL</option><option>2XL</option>
+              </select>
+            </div>
+
+            <div class="col-6">
+              <label for="food_allergy" class="form-label">Food allergy</label>
+              <input class="form-control" id="food_allergy" name="food_allergy" aria-label="Food allergy" autocomplete="off" />
+            </div>
+            <div class="col-6">
+              <label for="ada_needs" class="form-label">ADA needs</label>
+              <input class="form-control" id="ada_needs" name="ada_needs" aria-label="ADA needs" autocomplete="off" />
+            </div>
+          </div>
+
+          <div class="right" style="margin-top:1rem;">
+            <button type="submit" class="btn" aria-label="Add participant">Add Participant</button>
+          </div>
+          <p id="formHelp" style="margin:.5rem 0 0; font-size:.9rem; color:#555;">
+            All fields optional; add each participant one at a time.
+          </p>
+        </form>
+      </div>
+    </section>
+"""
+
+HTML_TABLE_TOP = """    <section aria-labelledby="currentParticipantsHeader" style="margin-top:1.25rem;">
+      <h2 id="currentParticipantsHeader" class="h5">Current Participants ({count})</h2>
+      <div class="card">
+        <div class="card-body">
+          <div class="table-responsive" role="region" aria-label="Participants table">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Student Org</th>
+                  <th scope="col">College/Company</th>
+                  <th scope="col">Tour</th>
+                  <th scope="col">Tee</th>
+                  <th scope="col" class="right">Fee</th>
+                </tr>
+              </thead>
+              <tbody>
+"""
+
+HTML_TABLE_EMPTY = """                <tr>
+                  <td colspan="6" class="text-muted">No participants yet.</td>
+                </tr>
+"""
+
+HTML_TABLE_ROW = """                <tr>
+                  <td>{first_name} {last_name}</td>
+                  <td>{student_organization}</td>
+                  <td>{college_company}</td>
+                  <td>{tour}</td>
+                  <td>{tee_shirt_size}</td>
+                  <td class="right">${fee}</td>
+                </tr>
+"""
+
+HTML_BOTTOM = """              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+@csrf_exempt  # keeps things simple; switch off later if you want CSRF
+@require_http_methods(["GET", "POST"])
+def registration_form_view(request):
+    fee = 25
+    if request.method == "POST":
+        rows = _get_rows(request)
+        rows.append({
+            "first_name": request.POST.get("first_name","").strip(),
+            "last_name": request.POST.get("last_name","").strip(),
+            "student_organization": request.POST.get("student_organization","").strip(),
+            "college_company": request.POST.get("college_company","").strip(),
+            "tour": request.POST.get("tour","").strip(),
+            "tee_shirt_size": request.POST.get("tee_shirt_size","").strip(),
+            "food_allergy": request.POST.get("food_allergy","").strip(),
+            "ada_needs": request.POST.get("ada_needs","").strip(),
+        })
+        _save_rows(request, rows)
+        return HttpResponseRedirect("/registrations/form/")
+
+    rows = _get_rows(request)
+    count = len(rows)
+    total = fee * count
+
+    parts = [HTML_TOP, HTML_ALERT.format(fee=fee, count=count, total=total), HTML_FORM,
+             HTML_TABLE_TOP.format(count=count)]
+    if count == 0:
+        parts.append(HTML_TABLE_EMPTY)
+    else:
+        for r in rows:
+            parts.append(HTML_TABLE_ROW.format(fee=fee, **{k: r.get(k,"") for k in (
+                "first_name","last_name","student_organization","college_company","tour","tee_shirt_size")}))
+
+    parts.append(HTML_BOTTOM)
+    return HttpResponse("".join(parts))

@@ -1,0 +1,159 @@
+{% load static %}
+<!doctype html>
+<html lang="en" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <title>FLC Registration</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="{% static 'admin/css/base.css' %}">
+  <style>
+    .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
+    .container{max-width:960px;margin:2rem auto;padding:0 1rem}
+    .header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem}
+    .btn{display:inline-block;padding:.5rem 1rem;border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;text-decoration:none}
+    .btn:hover{background:#0b5ed7}
+    .card{border:1px solid #ddd;border-radius:8px;margin-bottom:1rem}
+    .card-header{padding:.75rem 1rem;font-weight:600;border-bottom:1px solid #ddd;background:#f7f7f7}
+    .card-body{padding:1rem}
+    .row{display:flex;flex-wrap:wrap;gap:1rem}
+    .col{flex:1 1 300px}
+    label{display:block;margin-bottom:.25rem}
+    input,select,textarea{width:100%;padding:.5rem;border:1px solid #bbb;border-radius:6px}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:.5rem;border-bottom:1px solid #eee}
+    th{text-align:left}
+    .help{font-size:.875rem;color:#555}
+    .msg{margin:.5rem 0;color:#0a6847}
+    .errors{border:1px solid #e55353;background:#fff5f5;padding:.75rem;border-radius:6px;margin:.5rem 0}
+  </style>
+</head>
+<body>
+  <main class="container" role="main" aria-labelledby="pageTitle">
+    <div class="header">
+      <h1 id="pageTitle">FLC Registration</h1>
+      <a class="btn" href="{{ finish_url }}" aria-label="Finish and view summary">Finish &amp; Summary</a>
+    </div>
+
+    {% if messages %}
+      <div aria-live="polite" class="msg" role="status">
+        {% for m in messages %}{{ m }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
+      </div>
+    {% endif %}
+
+    {% if form.errors %}
+      <div class="errors" role="alert" aria-labelledby="errorHeading">
+        <strong id="errorHeading">Please correct the following:</strong>
+        <ul>
+          {% for field, errs in form.errors.items %}
+            <li><a href="#id_{{ field }}">{{ form[field].label }}: {{ errs|join:", " }}</a></li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    <div class="card" aria-labelledby="addHeader">
+      <div class="card-header" id="addHeader">Add Participant</div>
+      <div class="card-body">
+        <form method="post" role="form" aria-describedby="advisorEmailHelp">
+          {% csrf_token %}
+
+          <div class="row">
+            <div class="col">
+              <label for="{{ form.advisor_email.id_for_label }}">Advisor Email</label>
+              {{ form.advisor_email }}
+              <div id="advisorEmailHelp" class="help">All participants you add will be grouped under this email.</div>
+            </div>
+          </div>
+
+          <fieldset class="row" role="group" aria-labelledby="nameGroup">
+            <legend id="nameGroup" class="sr-only">Name</legend>
+            <div class="col">
+              <label for="{{ form.first_name.id_for_label }}">First Name</label>
+              {{ form.first_name }}
+            </div>
+            <div class="col">
+              <label for="{{ form.last_name.id_for_label }}">Last Name</label>
+              {{ form.last_name }}
+            </div>
+          </fieldset>
+
+          <fieldset class="row" role="group" aria-labelledby="orgGroup">
+            <legend id="orgGroup" class="sr-only">Organization and Company</legend>
+            <div class="col">
+              <label for="{{ form.student_organization.id_for_label }}">Student Organization</label>
+              {{ form.student_organization }}
+            </div>
+            <div class="col">
+              <label for="{{ form.college_company.id_for_label }}">College/Company</label>
+              {{ form.college_company }}
+            </div>
+          </fieldset>
+
+          <fieldset class="row" role="group" aria-labelledby="metaGroup">
+            <legend id="metaGroup" class="sr-only">Tour and T-Shirt</legend>
+            <div class="col">
+              <label for="{{ form.tour.id_for_label }}">Tour</label>
+              {{ form.tour }}
+            </div>
+            <div class="col">
+              <label for="{{ form.tee_shirt_size.id_for_label }}">T-Shirt Size</label>
+              {{ form.tee_shirt_size }}
+            </div>
+          </fieldset>
+
+          <fieldset class="row" role="group" aria-labelledby="needsGroup">
+            <legend id="needsGroup" class="sr-only">Allergies and ADA Needs</legend>
+            <div class="col">
+              <label for="{{ form.food_allergy.id_for_label }}">Food Allergy</label>
+              {{ form.food_allergy }}
+            </div>
+            <div class="col">
+              <label for="{{ form.ada_needs.id_for_label }}">ADA Needs</label>
+              {{ form.ada_needs }}
+            </div>
+          </fieldset>
+
+          <div style="margin-top:1rem">
+            <button type="submit" class="btn" aria-label="Add Participant">Add Participant</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <h2 id="summary" class="h5">Current Participants</h2>
+    {% if advisor_email %}
+      <div class="help">Advisor Email: <strong>{{ advisor_email }}</strong></div>
+    {% endif %}
+
+    <div class="table-responsive" role="region" aria-labelledby="summary">
+      <table role="table" aria-describedby="summary">
+        <caption class="sr-only">Participants list</caption>
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Student Org</th>
+            <th scope="col">College/Company</th>
+            <th scope="col">Tour</th>
+            <th scope="col">T-Shirt</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% if participants %}
+          {% for r in participants %}
+          <tr>
+            <td>{{ r.first_name }} {{ r.last_name }}</td>
+            <td>{{ r.student_organization }}</td>
+            <td>{{ r.college_company }}</td>
+            <td>{{ r.tour }}</td>
+            <td>{{ r.tee_shirt_size }}</td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr><td colspan="5" class="help">No participants yet. Add one above.</td></tr>
+        {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </main>
+</body>
+</html>

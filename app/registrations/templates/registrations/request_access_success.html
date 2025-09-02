@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Request Received{% endblock %}
+
+{% block content %}
+<section aria-labelledby="ras-title">
+  <h1 id="ras-title" class="mb-3">Request Received</h1>
+  <div class="alert alert-success" role="status">
+    Thanks! Your access request was sent to staff. We’ll get back to you soon.
+  </div>
+  <a class="btn btn-primary" href="{% url 'registrations:user_access' %}">Return to Access</a>
+</section>
+{% endblock %}

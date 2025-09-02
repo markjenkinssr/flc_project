@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block content %}
+<div class="container mt-5">
+    <h1 class="mb-4 text-primary">FLC Event Registration</h1>
+
+    <form method="post" id="event-registration-form" novalidate aria-label="Event Registration Form">
+        {% csrf_token %}
+
+        <!-- Category -->
+        <div class="mb-4">
+            <label for="id_category" class="form-label">Category</label>
+            <select name="category" id="id_category" class="form-select" aria-required="true">
+                <option value="">Select a category</option>
+                {% for cat in categories %}
+                <option value="{{ cat }}">{{ cat }}</option>
+                {% endfor %}
+            </select>
+            <div class="text-danger small mt-1" id="category-error"></div>
+        </div>
+
+        <!-- Name (populated dynamically) -->
+        <div class="mb-4">
+            <label for="id_name" class="form-label">Name</label>
+            <select name="name" id="id_name" class="form-select" aria-required="true" disabled>
+                <option value="">Select a name</option>
+            </select>
+            <div class="text-danger small mt-1" id="name-error"></div>
+        </div>
+
+        <!-- Email (readonly) -->
+        <div class="mb-4">
+            <label for="id_email" class="form-label">Email</label>
+            <input type="email" name="email" id="id_email" class="form-control" readonly aria-required="true">
+            <div class="text-danger small mt-1" id="email-error"></div>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-lg mt-3" aria-label="Submit Event Registration">
+            Register
+        </button>
+    </form>
+</div>
+
+<!-- AJAX Script -->
+<script src="{% static 'js/jquery.min.js' %}"></script>
+<script>
+$(document).ready(function() {
+    $('#id_category').change(function() {
+        var selectedCategory = $(this).val();
+
+        if (!selectedCategory) {
+            $('#id_name').prop('disabled', true).html('<option value="">Select a name</option>');
+            $('#id_email').val('');
+            return;
+        }
+
+        $.ajax({
+            url: "{% url 'ajax_names' %}",
+            data: {'category': selectedCategory},
+            success: function(data) {
+                var nameDropdown = $('#id_name');
+                nameDropdown.empty().append('<option value="">Select a name</option>');
+
+                data.names.forEach(function(item) {
+                    nameDropdown.append(
+                        $('<option>', {value: item.email, text: item.full_name})
+                    );
+                });
+
+                nameDropdown.prop('disabled', false);
+                $('#id_email').val('');
+            }
+        });
+    });
+
+    $('#id_name').change(function() {
+        var selectedEmail = $(this).val();
+        $('#id_email').val(selectedEmail);
+    });
+});
+</script>
+{% endblock %}

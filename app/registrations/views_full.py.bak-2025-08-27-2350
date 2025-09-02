@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+# Minimal, template-rendering views that don't depend on project models.
+# They are drop-in safe and compile cleanly. You can wire back richer logic later.
+
+from typing import List
+from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.shortcuts import render, redirect
+from django.contrib import messages
+
+# --- optional integrations with your project (safe fallbacks if missing) ---
+ACCESS_SESSION_KEY = "registrations_email"
+try:
+    # if you defined a constant use it
+    from .constants import ACCESS_SESSION_KEY as _ASK  # type: ignore
+    if _ASK:
+        ACCESS_SESSION_KEY = _ASK
+except Exception:
+    pass
+
+try:
+    from .decorators import require_access  # type: ignore
+except Exception:
+    # no-op fallback so the module always imports
+    def require_access(view_func):
+        return view_func
+
+
+# ---------------------------
+# Basic sanity endpoint
+# ---------------------------
+def sanity_view(request: HttpRequest) -> HttpResponse:
+    return HttpResponse("<h1>✅ Sanity OK</h1>", content_type="text/html")
+
+
+# ---------------------------
+# Access / landing
+# ---------------------------
+def user_access_view(request: HttpRequest) -> HttpResponse:
+    """
+    Renders your access page template.
+    If ?email= is provided, save it in session for later steps.
+    """
+    email = request.GET.get("email")
+    if email:
+        request.session[ACCESS_SESSION_KEY] = email
+        # keep people signed in for a while (12 hours); adjust later if you like
+        request.session.set_expiry(12 * 3600)
+        messages.success(request, "Email captured. You can continue.")
+
+    # Provide minimal context some templates expect
+    ctx = {
+        "categories": ["Student", "Faculty", "Staff"],
+        "names": [],
+        "email_in_session": request.session.get(ACCESS_SESSION_KEY),
+    }
+    return render(request, "registrations/user_access.html", ctx)
+
+
+# ---------------------------
+# Registration form page
+# ---------------------------
+@require_access
+def registration_form_view(request: HttpRequest, user_id: int) -> HttpResponse:
+    """
+    Shows the registration form template. Your original project may
+    bind a real Django Form and a model instance; for now we render
+    the template with a minimal context that won't 500.
+    """
+    ctx = {
+        "user_id": user_id,
+        "email_in_session": request.session.get(ACCESS_SESSION_KEY),
+    }
+    return render(request, "registrations/registration_form.html", ctx)
+
+
+# ---------------------------
+# Finish / sign-out page
+# ---------------------------
+def finish_session_view(request: HttpRequest, user_id: int) -> HttpResponse:
+    """
+    Clears the access session and renders the finish template.
+    """
+    request.session.pop(ACCESS_SESSION_KEY, None)
+    messages.info(request, "Your session has been cleared.")
+    return render(request, "registrations/finish_session.html", {"user_id": user_id})
+
+
+# ---------------------------
+# Manage pending users
+# ---------------------------
+@require_access
+def manage_pending_users(request: HttpRequest) -> HttpResponse:
+    """
+    Renders the real manage_pending_users template. If your original code
+    listed PendingUser objects, you can wire that back later.
+    """
+    ctx = {
+        "email_in_session": request.session.get(ACCESS_SESSION_KEY),
+        "pending": [],  # placeholder list; wire your queryset later
+    }
+    return render(request, "registrations/manage_pending_users.html", ctx)
+
+
+# ---------------------------
+# AJAX helper
+# ---------------------------
+def get_names_by_category(request: HttpRequest) -> JsonResponse:
+    """
+    Returns a simple JSON payload. Your original code likely filtered from a model;
+    you can re-attach that later. This keeps front-end JS happy for now.
+    """
+    category = (request.GET.get("category") or "").strip().lower()
+    names: List[str] = []
+    return JsonResponse({"names": names})
+

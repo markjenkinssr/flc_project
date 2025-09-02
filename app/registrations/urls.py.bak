@@ -1,0 +1,8 @@
+from django.urls import path
+from . import views_flat as vr
+
+app_name = "registrations"
+
+urlpatterns = [
+    path("form/", vr.registration_form_view, name="registration_form"),
+]
